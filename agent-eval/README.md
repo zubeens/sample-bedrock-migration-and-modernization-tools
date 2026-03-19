@@ -34,13 +34,17 @@ Works with traces exported from:
 
 ### Deterministic + LLM evaluation
 
-Combines two evaluation types:
-- Deterministic execution metrics
-- Rubric-based judge scoring
+Combines:
+- Deterministic metrics (computed from trace structure)
+- LLM-based rubric scoring (semantic evaluation)
 
 ### Parallel judge evaluation
 
 Multiple judges can run simultaneously across rubrics.
+
+### Fault-tolerant execution
+
+Evaluation artifacts are always generated even if optional steps (such as HTML report generation) fail.
 
 ### Config-driven
 
@@ -60,6 +64,23 @@ python -m agent_eval.cli \
   --output-dir ./output
 ```
 
+### Input Modes
+
+The CLI accepts both:
+- **Raw traces** → automatically normalized via Generic JSON Adapter
+- **NormalizedRun JSON** → directly evaluated (adapter skipped)
+
+The pipeline detects input type automatically.
+
+When `--rubrics` is omitted, built-in defaults are used:
+
+```bash
+python -m agent_eval.cli \
+  --input test-fixtures/baseline/good_001_direct_answer.json \
+  --judge-config test-fixtures/baseline/judges.mock.yaml \
+  --output-dir ./output
+```
+
 ### Output
 
 ```
@@ -67,34 +88,115 @@ output/
   ├── results.json
   ├── trace_eval.json
   ├── judge_runs.jsonl
-  └── normalized_run.*.json
+  ├── normalized_run.<run_id>.json
+  └── report_<run_id>.html
 ```
+
+Some artifacts are conditional depending on input mode and report settings.
 
 ### Artifact descriptions
 
 | File | Description |
 |------|-------------|
-| `results.json` | Final aggregated evaluation output |
+| `results.json` | Final aggregated evaluation output with config hashes and artifact checksums |
 | `trace_eval.json` | Detailed metrics and rubric results |
 | `judge_runs.jsonl` | Raw judge responses |
-| `normalized_run.*.json` | Normalized trace used by evaluator |
+| `normalized_run.*.json` | Normalized trace (only generated when input is raw) |
+| `report_<run_id>.html` | Interactive HTML report (optional, non-blocking) |
+
+### HTML Report
+
+An interactive HTML report is generated after evaluation.
+
+- Non-blocking: evaluation succeeds even if report generation fails
+- Generated unless `--skip-report` is provided
+- Includes metrics, rubric scores, evidence, and diagnostics
+- Stored as `report_<run_id>.html` in output directory
+
+To skip report generation:
+
+```bash
+python -m agent_eval.cli \
+  --input trace.json \
+  --judge-config judges.yaml \
+  --rubrics rubrics.yaml \
+  --output-dir ./output \
+  --skip-report
+```
+
+To generate a report without charts (useful for faster output or environments without chart dependencies):
+
+```bash
+python -m agent_eval.cli \
+  --input trace.json \
+  --judge-config judges.yaml \
+  --rubrics rubrics.yaml \
+  --output-dir ./output \
+  --no-charts
+```
+
+To generate reports from existing artifacts:
+
+```python
+from agent_eval.evaluators.trace_eval.reporting import generate_report
+
+report_path = generate_report(
+    output_dir="./output",
+    run_id="my_run",
+    enable_charts=True
+)
+```
+
+For report structure, performance, and troubleshooting details, see [guides/HTML_REPORT_USER_GUIDE.md](guides/HTML_REPORT_USER_GUIDE.md).
+
+## CLI Usage
+
+The framework provides a unified CLI for running the full evaluation pipeline. The CLI uses a single command interface (no subcommands).
+
+### Pipeline Contract
+
+```
+Input → Adapter (if raw) → Evaluator → Artifacts → (Optional) Report
+```
+
+### Supported flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--input` | Yes | Path to input file (raw trace or NormalizedRun JSON) |
+| `--judge-config` | Yes | Path to judges.yaml configuration |
+| `--output-dir` | Yes | Directory for output files |
+| `--rubrics` | No | Path to user rubrics.yaml (optional; defaults are used if not provided) |
+| `--adapter-config` | No | Path to adapter configuration (for raw trace processing) |
+| `--skip-report` | No | Skip HTML report generation |
+| `--no-charts` | No | Disable chart generation in HTML reports |
+| `--verbose` | No | Enable verbose output |
+| `--debug` | No | Enable debug mode with full stack traces |
+
+### Validate CLI setup
+
+```bash
+python -m agent_eval.cli --help
+```
 
 ## How It Works
 
 The framework follows a simple pipeline:
 
 ```
-Raw trace JSON
+Input (raw or normalized)
       ↓
-Generic JSON Adapter
+Normalization (if raw)
       ↓
-NormalizedRun schema
+NormalizedRun
       ↓
 Trace Evaluator
   • deterministic metrics
   • rubric-based judge scoring
       ↓
-Evaluation artifacts
+Artifacts
+      ↓
+(Optional) Report
 ```
 
 ### Deterministic metrics
@@ -333,12 +435,14 @@ Evidence extraction may be empty. Inspect:
 
 Use the adapter inspection tool:
 ```bash
-inspect_adapter_stages
+python -m agent_eval.tools.inspect_adapter_stages trace.json
 ```
 
 ## Optional Integrations
 
 ### CloudWatch log export
+
+Exports logs into Generic JSON format compatible with the adapter.
 
 ```bash
 python -m agent_eval.tools.cloudwatch_extractor \
@@ -383,16 +487,7 @@ Evaluation artifacts
 
 ## Testing
 
-The framework includes sample test fixtures for validation:
-
-```bash
-# Run evaluation on sample trace
-python -m agent_eval.cli \
-  --input test-fixtures/baseline/good_001_direct_answer.json \
-  --judge-config test-fixtures/baseline/judges.mock.yaml \
-  --rubrics test-fixtures/baseline/rubrics.test.yaml \
-  --output-dir ./output
-```
+The framework includes sample test fixtures for validation. Use the Quick Start command above with the baseline fixtures to verify your setup.
 
 Test fixtures are located in `test-fixtures/` and include:
 - Baseline traces (good_001, good_002, good_003)
@@ -443,5 +538,4 @@ python -m agent_eval.cli --help
 
 - `guides/RUBRIC_SELECTOR_VALIDATION.md`
 - `guides/VALIDATION_RESULTS.md`
-- `guides/FIX_PROGRESS.md`
 - `agent_eval/tools/agentcore_pipeline/README.md`

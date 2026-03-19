@@ -49,6 +49,9 @@ agent-eval/.venv/
 agent-eval/.coverage
 .coverage
 
+# Tests (development artifacts, not for merge)
+agent-eval/tests/
+
 # Test outputs
 agent-eval/test_otel_turns*.json
 agent-eval/test-no-override/
@@ -70,6 +73,17 @@ agent-eval/*_VALIDATION.md
 agent-eval/*_SUMMARY.md
 agent-eval/*_FIXES*.md
 agent-eval/stich-all.text
+
+# Manual test reports and synthetic outputs
+agent-eval/manual-test-reports/
+agent-eval/synthetic_*/
+agent-eval/performance_results.json
+
+# Development scripts
+agent-eval/scripts/
+
+# Requirements file (managed via pyproject.toml)
+agent-eval/requirements.txt
 
 # IDE
 .vscode/

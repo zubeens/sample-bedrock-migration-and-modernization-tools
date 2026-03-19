@@ -9,6 +9,7 @@ This module writes canonical output files for trace evaluation:
 
 import json
 import hashlib
+import warnings
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import asdict, is_dataclass
@@ -31,6 +32,10 @@ class OutputWriter:
     """
     
     FORMAT_VERSION = "1.0.0"
+    
+    # Canonical artifact keys expected in artifact_paths / artifact_checksums.
+    # Unexpected keys are tolerated (hashed and serialized) but trigger a warning.
+    CANONICAL_ARTIFACT_KEYS = frozenset({"trace_eval", "judge_runs", "report"})
     
     def __init__(self, output_dir: str):
         """
@@ -163,7 +168,7 @@ class OutputWriter:
         deterministic_metrics: MetricsResult,
         rubric_results: Dict[str, Any],
         judge_disagreements: List[Dict[str, Any]],
-        artifact_paths: Dict[str, str],
+        artifact_paths: Dict[str, Optional[Union[str, Path]]],
         execution_stats: Dict[str, Any]
     ) -> str:
         """
@@ -175,9 +180,16 @@ class OutputWriter:
             judge_config: Judge configuration for hashing
             input_data: Input NormalizedRun for hashing
             deterministic_metrics: Full metrics object
-            rubric_results: Per-rubric, per-turn structure with aggregated scores
+            rubric_results: Per-rubric, per-turn structure with aggregated scores.
+                This is the per-rubric/per-turn dict built by
+                build_rubric_results_for_results_json(), distinct from the
+                list-of-dicts used in trace_eval.json.
             judge_disagreements: List of high-risk disagreements
-            artifact_paths: Paths to judge_runs.jsonl and trace_eval.json
+            artifact_paths: Map of artifact name to file path. Values may be
+                None for artifacts not yet generated (e.g. report before
+                Step 11). If a "results" key is present it is silently
+                skipped — results.json cannot self-hash. Callers are
+                encouraged to omit it, but the writer tolerates it.
             execution_stats: Execution statistics (total_jobs, completed_jobs, etc.)
             
         Returns:
@@ -194,16 +206,36 @@ class OutputWriter:
         judge_config_hash = self.compute_config_hash(judge_config)
         input_hash = self.compute_config_hash(input_data)
         
-        # Compute artifact hashes for integrity verification
-        artifact_hashes = {}
+        # Compute artifact checksums for integrity verification.
+        # Skip None paths (artifact not yet generated, e.g. report before Step 11)
+        # and skip "results" key to avoid self-hashing.
+        # Unexpected keys are still hashed and serialized (tolerant contract)
+        # but emit a warning so callers can detect drift.
+        artifact_checksums: Dict[str, Optional[str]] = {}
         for artifact_name, artifact_path in artifact_paths.items():
+            if artifact_name == "results":
+                continue
+            if artifact_name not in self.CANONICAL_ARTIFACT_KEYS:
+                warnings.warn(
+                    f"Unexpected artifact key '{artifact_name}' in artifact_paths. "
+                    f"Canonical keys are: {sorted(self.CANONICAL_ARTIFACT_KEYS)}",
+                    stacklevel=2,
+                )
+            if artifact_path is None:
+                artifact_checksums[artifact_name] = None
+                continue
             try:
-                artifact_hashes[artifact_name] = self.compute_file_hash(artifact_path)
-            except (FileNotFoundError, IOError) as e:
-                # Artifact may not exist yet (e.g., trace_eval.json written after results.json)
-                artifact_hashes[artifact_name] = None
+                artifact_checksums[artifact_name] = self.compute_file_hash(artifact_path)
+            except (FileNotFoundError, IOError):
+                # Artifact file does not exist on disk yet
+                artifact_checksums[artifact_name] = None
         
         # Build output structure matching results.schema.json
+        # Uses "artifact_checksums" as the canonical key (aligned with
+        # report_builder and runner update_results_after_report conventions).
+        # The runner's _update_results_with_report() handles legacy
+        # "artifact_hashes" via fallback, so new writes only need the
+        # canonical key. No dual-write required.
         output_data = {
             "format_version": self.FORMAT_VERSION,
             "run_id": run_id,
@@ -213,8 +245,10 @@ class OutputWriter:
             "deterministic_metrics": deterministic_metrics.to_dict(),
             "rubric_results": rubric_results,
             "judge_disagreements": judge_disagreements,
-            "artifact_paths": artifact_paths,
-            "artifact_hashes": artifact_hashes,
+            "artifact_paths": {
+                k: v for k, v in artifact_paths.items() if k != "results"
+            },
+            "artifact_checksums": artifact_checksums,
             "execution_stats": execution_stats
         }
         
@@ -228,20 +262,28 @@ class OutputWriter:
         
         return str(output_path)
     
-    def compute_file_hash(self, file_path: str) -> str:
+    def compute_file_hash(self, file_path: Union[str, Path]) -> str:
         """
         Compute SHA-256 hash of a file.
         
         Args:
-            file_path: Path to file to hash
+            file_path: Path to file to hash. Must be a non-None str or Path.
             
         Returns:
             Hexadecimal SHA-256 hash string
             
         Raises:
+            TypeError: If file_path is None or not str/Path
             FileNotFoundError: If file does not exist
             IOError: If file cannot be read
         """
+        if file_path is None:
+            raise TypeError("file_path must not be None")
+        if not isinstance(file_path, (str, Path)):
+            raise TypeError(
+                f"file_path must be str or Path, got {type(file_path).__name__}"
+            )
+        
         sha256_hash = hashlib.sha256()
         
         with open(file_path, 'rb') as f:
@@ -274,15 +316,19 @@ class OutputWriter:
         
         return sha256_hash.hexdigest()
     
-    def validate_json_output(self, file_path: str) -> bool:
+    def validate_json_output(self, file_path: Union[str, Path]) -> bool:
         """
-        Validate that output file is valid JSON.
+        Validate that output file contains syntactically valid JSON.
+        
+        Note: This only checks JSON parseability. It does NOT validate
+        against any schema or check for required keys/structure. For
+        structural validation, use validate_against_schema().
         
         Args:
             file_path: Path to JSON file to validate
             
         Returns:
-            True if file is valid JSON, False otherwise
+            True if file is parseable JSON, False otherwise
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -293,8 +339,8 @@ class OutputWriter:
     
     def validate_against_schema(
         self, 
-        file_path: str, 
-        schema_path: str
+        file_path: Union[str, Path], 
+        schema_path: Union[str, Path]
     ) -> tuple[bool, Optional[str]]:
         """
         Validate JSON output against JSON Schema.

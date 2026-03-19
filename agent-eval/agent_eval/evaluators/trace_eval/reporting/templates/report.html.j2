@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="agent-eval report builder v{{ view_model.report_metadata.generator_version }}">
+    <title>Evaluation Report - {{ view_model.run_summary.run_id }}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .report-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { margin-top: 0; color: #1a1a1a; }
+        h2 { color: #333; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background-color: #f5f5f5;
+            font-weight: 600;
+        }
+        tr:hover { background-color: #f9f9f9; }
+        .collapsible {
+            cursor: pointer;
+            background-color: #f0f0f0;
+            padding: 10px 15px;
+            border: none;
+            text-align: left;
+            width: 100%;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+        }
+        .collapsible:hover { background-color: #e0e0e0; }
+        .collapsible::after { content: ' \25B6'; font-size: 12px; }
+        .collapsible.active::after { content: ' \25BC'; font-size: 12px; }
+        .collapsible-content {
+            display: none;
+            padding: 15px;
+            background-color: #fafafa;
+            border-left: 3px solid #e0e0e0;
+            margin-top: 5px;
+        }
+        .high-risk {
+            background-color: #ffebee !important;
+            border-left: 4px solid #f44336;
+        }
+        .score-high { color: #4caf50; font-weight: bold; }
+        .score-medium { color: #ff9800; font-weight: bold; }
+        .score-low { color: #f44336; font-weight: bold; }
+        .chart-container {
+            margin: 20px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 4px;
+        }
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .metadata-item {
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .metadata-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        .metadata-value {
+            font-size: 16px;
+            font-weight: 500;
+        }
+        .text-truncated {
+            max-height: 100px;
+            overflow: hidden;
+            position: relative;
+        }
+        .text-truncated.expanded {
+            max-height: none;
+        }
+        .show-more-btn {
+            color: #1976d2;
+            cursor: pointer;
+            text-decoration: underline;
+            font-size: 14px;
+            margin-top: 5px;
+            display: inline-block;
+        }
+        .evidence-section {
+            background: #f9f9f9;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 4px;
+        }
+        .reasoning-snippet {
+            background: white;
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 3px solid #2196f3;
+        }
+        @media (max-width: 768px) {
+            .report-container { padding: 15px; }
+            table { font-size: 14px; }
+            th, td { padding: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="report-container">
+        <h1>Agent Evaluation Report</h1>
+        
+        {# Report Metadata Section #}
+        <div class="section">
+            <h2>Report Metadata</h2>
+            <div class="metadata-grid">
+                <div class="metadata-item">
+                    <div class="metadata-label">Generator Version</div>
+                    <div class="metadata-value">{{ view_model.report_metadata.generator_version }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Generated At</div>
+                    <div class="metadata-value">{{ view_model.report_metadata.generation_timestamp.strftime('%Y-%m-%d %H:%M:%S') }}{% if view_model.report_metadata.generation_timestamp.tzinfo %} {{ view_model.report_metadata.generation_timestamp.tzname() or 'UTC' }}{% endif %}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Charts Enabled</div>
+                    <div class="metadata-value">{{ 'Yes' if view_model.report_metadata.charts_enabled else 'No' }}</div>
+                </div>
+                <div class="metadata-item">
+                    <div class="metadata-label">Template Version</div>
+                    <div class="metadata-value">{{ view_model.report_metadata.template_version }}</div>
+                </div>
+            </div>
+            {% if view_model.report_metadata.source_artifact_versions %}
+            <h3 style="margin-top: 20px;">Source Artifact Versions</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Artifact</th>
+                        <th>Version</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for artifact, version in view_model.report_metadata.source_artifact_versions.items() %}
+                    <tr>
+                        <td>{{ artifact }}</td>
+                        <td>{{ version }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+
+        {# Run Summary Section #}
+        <div class="section">
+            <h2>Run Summary</h2>
+            <table>
+                <tr>
+                    <th>Run ID</th>
+                    <td>{{ view_model.run_summary.run_id }}</td>
+                </tr>
+                <tr>
+                    <th>Processed At</th>
+                    <td>{% if view_model.run_summary.processed_at %}{{ view_model.run_summary.processed_at.strftime('%Y-%m-%d %H:%M:%S') }}{% if view_model.run_summary.processed_at.tzinfo %} {{ view_model.run_summary.processed_at.tzname() or 'UTC' }}{% endif %}{% else %}N/A{% endif %}</td>
+                </tr>
+                {% if view_model.run_summary.source %}
+                <tr>
+                    <th>Source</th>
+                    <td>{{ view_model.run_summary.source }}</td>
+                </tr>
+                {% endif %}
+                <tr>
+                    <th>Adapter Version</th>
+                    <td>{{ view_model.run_summary.adapter_version }}</td>
+                </tr>
+                <tr>
+                    <th>Segmentation Strategy</th>
+                    <td>{{ view_model.run_summary.segmentation_strategy }}</td>
+                </tr>
+                <tr>
+                    <th>Run Confidence</th>
+                    <td class="{% if view_model.run_summary.run_confidence >= 0.7 %}score-high{% elif view_model.run_summary.run_confidence >= 0.4 %}score-medium{% else %}score-low{% endif %}">
+                        {{ "%.2f"|format(view_model.run_summary.run_confidence) }}
+                    </td>
+                </tr>
+                <tr>
+                    <th>Overall Mapping Coverage</th>
+                    <td>{{ "%.1f%%"|format(view_model.run_summary.overall_mapping_coverage * 100) }}</td>
+                </tr>
+            </table>
+        </div>
+
+        {# Trace Summary Section #}
+        <div class="section">
+            <h2>Trace Summary</h2>
+            <table>
+                <tr>
+                    <th>Turn Count</th>
+                    <td>{{ view_model.trace_summary.turn_count }}</td>
+                </tr>
+                <tr>
+                    <th>Total Steps</th>
+                    <td>{{ view_model.trace_summary.total_steps }}</td>
+                </tr>
+                <tr>
+                    <th>Tool Call Count</th>
+                    <td>{{ view_model.trace_summary.tool_call_count }}</td>
+                </tr>
+                <tr>
+                    <th>Average Latency</th>
+                    <td>{{ "%.2f ms"|format(view_model.trace_summary.avg_latency_ms) if view_model.trace_summary.avg_latency_ms is not none else 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <th>Total Latency</th>
+                    <td>{{ "%.2f ms"|format(view_model.trace_summary.total_latency_ms) if view_model.trace_summary.total_latency_ms is not none else 'N/A' }}</td>
+                </tr>
+            </table>
+            
+            {% if view_model.trace_summary.finish_reasons %}
+            <h3>Finish Reasons</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Reason</th>
+                        <th>Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for reason, count in view_model.trace_summary.finish_reasons.items() %}
+                    <tr>
+                        <td>{{ reason }}</td>
+                        <td>{{ count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+
+        {# Rubric Score Table Section #}
+        <div class="section">
+            <h2>Rubric Scores</h2>
+            {% if view_model.rubric_scores %}
+            <table id="rubric-table">
+                <thead>
+                    <tr>
+                        <th>Rubric ID</th>
+                        <th>Scope</th>
+                        <th>Turn ID</th>
+                        <th>Score</th>
+                        <th>Scoring Type</th>
+                        <th>Disagreement</th>
+                        <th>High Risk</th>
+                        <th>Judge Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for score in view_model.rubric_scores %}
+                    <tr class="{% if score.high_risk_flag %}high-risk{% endif %}">
+                        <td>{{ score.rubric_id }}</td>
+                        <td>{{ score.scope }}</td>
+                        <td>{{ score.turn_id if score.turn_id else 'N/A' }}</td>
+                        <td class="{% if not score.is_categorical and score.cross_judge_score is not none %}{% if score.cross_judge_score >= 0.7 %}score-high{% elif score.cross_judge_score >= 0.4 %}score-medium{% else %}score-low{% endif %}{% endif %}">
+                            {% if score.is_categorical %}
+                                {{ score.categorical_summary.aggregated_label if score.categorical_summary and score.categorical_summary.aggregated_label else 'N/A' }}
+                            {% else %}
+                                {% if score.cross_judge_score is not none %}
+                                    {{ "%.2f"|format(score.cross_judge_score) }}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>{{ score.scoring_type }}</td>
+                        <td>
+                            {% if score.disagreement_signal is not none %}
+                                {{ "%.3f"|format(score.disagreement_signal) }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>{{ '⚠️' if score.high_risk_flag else '✓' }}</td>
+                        <td>{{ score.judge_count }}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="8" style="padding: 0; border: none;">
+                            <button class="collapsible">Why this score?</button>
+                            <div class="collapsible-content">
+                                <div class="evidence-section">
+                                    <h4>Final Aggregated Score</h4>
+                                    <p><strong>Score:</strong> 
+                                        {% if score.is_categorical %}
+                                            {{ score.categorical_summary.aggregated_label if score.categorical_summary and score.categorical_summary.aggregated_label else 'N/A' }}
+                                        {% else %}
+                                            {% if score.cross_judge_score is not none %}
+                                                {{ "%.2f"|format(score.cross_judge_score) }}
+                                            {% else %}
+                                                N/A
+                                            {% endif %}
+                                        {% endif %}
+                                    </p>
+                                    <p><strong>Scoring Type:</strong> {{ score.scoring_type }}</p>
+                                    
+                                    {% if score.is_categorical and score.categorical_summary %}
+                                    <h4>Categorical Vote Breakdown</h4>
+                                    <p><strong>Disagreement:</strong> {{ score.categorical_summary.disagreement_text if score.categorical_summary.disagreement_text else 'N/A' }}</p>
+                                    {% if score.categorical_summary.vote_breakdown and score.categorical_summary.vote_breakdown is mapping %}
+                                    <table style="margin-top: 10px;">
+                                        <thead>
+                                            <tr>
+                                                <th>Label</th>
+                                                <th>Vote Count</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for label, count in score.categorical_summary.vote_breakdown.items() %}
+                                            <tr>
+                                                <td>{{ label }}</td>
+                                                <td>{{ count }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                    {% else %}
+                                    <p style="color: #666; font-style: italic;">No votes recorded for this rubric.</p>
+                                    {% endif %}
+                                    {% endif %}
+                                    
+                                    {% if score.disagreement_signal is not none and score.disagreement_signal > 0.3 %}
+                                    <p><strong>Disagreement Summary:</strong> High disagreement detected ({{ "%.3f"|format(score.disagreement_signal) }})</p>
+                                    {% endif %}
+                                    
+                                    {# Evidence fields used - match by rubric_id and scope, then turn_id only for turn-scoped #}
+                                    {% set evidence_detail = view_model.evidence_details | selectattr('rubric_id', 'equalto', score.rubric_id) | selectattr('scope', 'equalto', score.scope) | list %}
+                                    {% if score.scope == 'turn' and score.turn_id %}
+                                        {% set evidence_detail = evidence_detail | selectattr('turn_id', 'equalto', score.turn_id) | list %}
+                                    {% endif %}
+                                    {% if evidence_detail %}
+                                        {% set detail = evidence_detail[0] %}
+                                        
+                                        {# Display evidence resolution status #}
+                                        {% if detail.resolution_status != 'success' %}
+                                        <p style="color: #ff9800;"><strong>Evidence Resolution Status:</strong> {{ detail.resolution_status }}</p>
+                                        {% endif %}
+                                        
+                                        {% if detail.evidence_fields_used %}
+                                        <h4>Evidence Fields Used</h4>
+                                        <ul>
+                                            {% for field in detail.evidence_fields_used %}
+                                            <li>{{ field }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% else %}
+                                        <p style="color: #666; font-style: italic;">No evidence fields recorded.</p>
+                                        {% endif %}
+                                        
+                                        {% if detail.evidence_spans %}
+                                        <h4>Evidence Previews</h4>
+                                        {% for span in detail.evidence_spans %}
+                                        <div style="margin: 10px 0; padding: 10px; background: white; border-left: 3px solid #2196f3;">
+                                            <strong>Selector:</strong> {{ span.selector }}<br>
+                                            <strong>Content:</strong>
+                                            <div class="text-truncated" id="evidence-{{ score.rubric_id }}-{{ score.turn_id if score.turn_id else 'run' }}-{{ loop.index }}">
+                                                {{ span.resolved_content }}
+                                            </div>
+                                            {% if span.resolved_content|length > 200 %}
+                                            <span class="show-more-btn" onclick="toggleText('evidence-{{ score.rubric_id }}-{{ score.turn_id if score.turn_id else 'run' }}-{{ loop.index }}')">Show more</span>
+                                            {% endif %}
+                                        </div>
+                                        {% endfor %}
+                                        {% else %}
+                                        <p style="color: #666; font-style: italic;">No evidence previews available.</p>
+                                        {% endif %}
+                                    {% else %}
+                                    <p style="color: #666; font-style: italic;">No evidence details available for this rubric.</p>
+                                    {% endif %}
+                                    
+                                    {# Judge reasoning #}
+                                    {% set reasoning_key = score.rubric_id + ':' + (score.turn_id if score.turn_id else '') %}
+                                    {% if view_model.judge_reasoning.get(reasoning_key) or view_model.judge_reasoning.get(score.rubric_id) %}
+                                    <h4>Judge Reasoning</h4>
+                                    {% set reasoning_list = view_model.judge_reasoning.get(reasoning_key) or view_model.judge_reasoning.get(score.rubric_id) %}
+                                    {% for snippet in reasoning_list %}
+                                    <div class="reasoning-snippet">
+                                        <strong>Judge:</strong> {{ snippet.judge_id }}<br>
+                                        <strong>Score:</strong> {{ snippet.score_numeric if snippet.score_numeric is not none else snippet.score_label }}<br>
+                                        <strong>Reasoning:</strong>
+                                        <div class="text-truncated" id="reasoning-{{ score.rubric_id }}-{{ score.turn_id if score.turn_id else 'run' }}-{{ loop.index }}">
+                                            {{ snippet.reasoning }}
+                                        </div>
+                                        {% if snippet.reasoning|length > 200 %}
+                                        <span class="show-more-btn" onclick="toggleText('reasoning-{{ score.rubric_id }}-{{ score.turn_id if score.turn_id else 'run' }}-{{ loop.index }}')">Show more</span>
+                                        {% endif %}
+                                    </div>
+                                    {% endfor %}
+                                    {% else %}
+                                    <p style="color: #666; font-style: italic;">No judge reasoning available for this rubric.</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No rubric scores available.</p>
+            {% endif %}
+        </div>
+
+        {# Judge Details Section #}
+        <div class="section">
+            <h2>Judge Details</h2>
+            {% if view_model.judge_details %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Judge ID</th>
+                        <th>Provider</th>
+                        <th>Model</th>
+                        <th>Total Jobs</th>
+                        <th>Success Rate</th>
+                        <th>Avg Latency</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for judge in view_model.judge_details %}
+                    <tr>
+                        <td>{{ judge.judge_id }}</td>
+                        <td>{{ judge.provider }}</td>
+                        <td>{{ judge.model }}</td>
+                        <td>{{ judge.total_jobs }}</td>
+                        <td>
+                            {% set success_rate = (judge.successful_jobs / judge.total_jobs * 100) if judge.total_jobs > 0 else 0 %}
+                            <span class="{% if success_rate >= 90 %}score-high{% elif success_rate >= 70 %}score-medium{% else %}score-low{% endif %}">
+                                {{ "%.1f%%"|format(success_rate) }}
+                            </span>
+                            ({{ judge.successful_jobs }}/{{ judge.total_jobs }})
+                        </td>
+                        <td>{{ "%.2f ms"|format(judge.avg_latency_ms) if judge.avg_latency_ms is not none else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>Judge details unavailable.</p>
+            {% endif %}
+        </div>
+
+        {# Latency Analysis Section #}
+        <div class="section">
+            <h2>Latency Analysis</h2>
+            {% if view_model.latency_stats %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Turn ID</th>
+                        <th>Normalized Latency</th>
+                        <th>Runtime Reported Latency</th>
+                        <th>Total Latency</th>
+                        <th>Step Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for stat in view_model.latency_stats %}
+                    <tr>
+                        <td>{{ stat.turn_id }}</td>
+                        <td>{{ "%.2f ms"|format(stat.normalized_latency_ms) if stat.normalized_latency_ms is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f ms"|format(stat.runtime_reported_latency_ms) if stat.runtime_reported_latency_ms is not none else 'N/A' }}</td>
+                        <td>{{ "%.2f ms"|format(stat.total_latency_ms) if stat.total_latency_ms is not none else 'N/A' }}</td>
+                        <td>{{ stat.step_count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No latency data available.</p>
+            {% endif %}
+        </div>
+
+        {# Tool Activity Section #}
+        <div class="section">
+            <h2>Tool Activity</h2>
+            {% if view_model.tool_activity %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Turn ID</th>
+                        <th>Tool Call Count</th>
+                        <th>Successful</th>
+                        <th>Failed</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for activity in view_model.tool_activity %}
+                    <tr>
+                        <td>{{ activity.turn_id }}</td>
+                        <td>{{ activity.tool_call_count }}</td>
+                        <td class="score-high">{{ activity.successful_tools }}</td>
+                        <td class="{% if activity.failed_tools > 0 %}score-low{% endif %}">{{ activity.failed_tools }}</td>
+                        <td>
+                            {% if activity.tool_calls %}
+                            <button class="collapsible">Show tool calls</button>
+                            <div class="collapsible-content">
+                                <table style="margin: 0;">
+                                    <thead>
+                                        <tr>
+                                            <th>Tool Name</th>
+                                            <th>Status</th>
+                                            <th>Latency</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for tool in activity.tool_calls %}
+                                        <tr>
+                                            <td>{{ tool['name'] }}</td>
+                                            <td class="{% if tool['status'] == 'success' %}score-high{% elif tool['status'] in ['failed', 'error'] %}score-low{% endif %}">{{ tool['status'] }}</td>
+                                            <td>{{ "%.2f ms"|format(tool['latency_ms']) if tool.get('latency_ms') is not none else 'N/A' }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {% else %}
+                            No tool calls
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p>No tool activity data available.</p>
+            {% endif %}
+        </div>
+
+        {# Adapter Diagnostics Section (Collapsible) #}
+        <div class="section">
+            <button class="collapsible">Adapter Diagnostics</button>
+            <div class="collapsible-content">
+                {% if view_model.adapter_diagnostics and view_model.adapter_diagnostics.is_available %}
+                <h3>Processing Statistics</h3>
+                <table>
+                    <tr>
+                        <th>Total Events Processed</th>
+                        <td>{{ view_model.adapter_diagnostics.total_events_processed }}</td>
+                    </tr>
+                    <tr>
+                        <th>Events with Valid Timestamps</th>
+                        <td>{{ view_model.adapter_diagnostics.events_with_valid_timestamps }}</td>
+                    </tr>
+                    <tr>
+                        <th>Dropped Events</th>
+                        <td class="{% if view_model.adapter_diagnostics.dropped_events_count > 0 %}score-medium{% endif %}">
+                            {{ view_model.adapter_diagnostics.dropped_events_count }}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Invalid Events</th>
+                        <td class="{% if view_model.adapter_diagnostics.invalid_events_count > 0 %}score-low{% endif %}">
+                            {{ view_model.adapter_diagnostics.invalid_events_count }}
+                        </td>
+                    </tr>
+                </table>
+                
+                {% if view_model.adapter_diagnostics.confidence_penalties %}
+                <h3>Confidence Penalties</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Reason</th>
+                            <th>Penalty</th>
+                            <th>Location</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for penalty in view_model.adapter_diagnostics.confidence_penalties %}
+                        <tr>
+                            <td>{{ penalty['reason'] }}</td>
+                            <td>{{ "%.3f"|format(penalty['penalty']) }}</td>
+                            <td>{{ penalty.get('location', 'N/A') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                
+                {% if view_model.adapter_diagnostics.orphan_tool_results %}
+                <h3>Orphan Tool Results</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tool Name</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for orphan in view_model.adapter_diagnostics.orphan_tool_results %}
+                        <tr>
+                            <td>{{ orphan.get('tool_name', 'Unknown') }}</td>
+                            <td>{{ orphan | tojson }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                
+                {% if view_model.adapter_diagnostics.warnings %}
+                <h3>Warnings</h3>
+                <ul>
+                    {% for warning in view_model.adapter_diagnostics.warnings %}
+                    <li>{{ warning }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                
+                {% if view_model.adapter_diagnostics.missing_fields_summary %}
+                <h3>Missing Fields Summary (Top 10)</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Field Name</th>
+                            <th>Occurrences</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for field, locations in (view_model.adapter_diagnostics.missing_fields_summary.items() | list)[:10] %}
+                        <tr>
+                            <td>{{ field }}</td>
+                            <td>{{ locations|length }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% else %}
+                <p>No adapter diagnostics available.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {# Charts Section #}
+        {% if view_model.report_metadata.charts_enabled %}
+        <div class="section">
+            <h2>Visualizations</h2>
+            {% if charts %}
+                {% for chart in charts %}
+                <div class="chart-container">
+                    {{ chart | safe }}
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #666; font-style: italic;">Charts were enabled but no charts were generated.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {# Artifacts Section #}
+        <div class="section">
+            <h2>Artifacts</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Artifact</th>
+                        <th>File Path</th>
+                        <th>Checksum (SHA256)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Normalized Run</td>
+                        <td><code>{{ view_model.artifact_paths.normalized_run }}</code></td>
+                        <td><code>{{ view_model.artifact_paths.checksums.get(view_model.artifact_paths.normalized_run.replace('\\', '/').split('/')[-1], 'N/A') }}</code></td>
+                    </tr>
+                    <tr>
+                        <td>Trace Eval</td>
+                        <td><code>{{ view_model.artifact_paths.trace_eval }}</code></td>
+                        <td><code>{{ view_model.artifact_paths.checksums.get('trace_eval.json', 'N/A') }}</code></td>
+                    </tr>
+                    <tr>
+                        <td>Judge Runs</td>
+                        <td><code>{{ view_model.artifact_paths.judge_runs }}</code></td>
+                        <td><code>{{ view_model.artifact_paths.checksums.get('judge_runs.jsonl', 'N/A') }}</code></td>
+                    </tr>
+                    <tr>
+                        <td>Results</td>
+                        <td><code>{{ view_model.artifact_paths.results if view_model.artifact_paths.results else 'N/A' }}</code></td>
+                        <td><code>{{ view_model.artifact_paths.checksums.get('results.json', 'N/A') }}</code></td>
+                    </tr>
+                    <tr>
+                        <td>Report</td>
+                        <td><code>{{ view_model.artifact_paths.report if view_model.artifact_paths.report else 'N/A' }}</code></td>
+                        <td>Current file</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Collapsible sections functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            var collapsibles = document.getElementsByClassName('collapsible');
+            
+            for (var i = 0; i < collapsibles.length; i++) {
+                collapsibles[i].addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    var content = this.nextElementSibling;
+                    if (content.style.display === 'block') {
+                        content.style.display = 'none';
+                    } else {
+                        content.style.display = 'block';
+                    }
+                });
+            }
+        });
+
+        // Text truncation toggle functionality
+        function toggleText(elementId) {
+            var element = document.getElementById(elementId);
+            var btn = element.nextElementSibling;
+            
+            if (element.classList.contains('expanded')) {
+                element.classList.remove('expanded');
+                btn.textContent = 'Show more';
+            } else {
+                element.classList.add('expanded');
+                btn.textContent = 'Show less';
+            }
+        }
+    </script>
+</body>
+</html>

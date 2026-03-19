@@ -2,27 +2,40 @@
 Trace Evaluator Runner - Main orchestration for trace evaluation.
 
 This module orchestrates the complete evaluation flow:
-1. Input validation
-2. Adapter integration (if needed)
-3. Deterministic metrics computation
-4. Rubric loading and merging
-5. Judge configuration loading
-6. JudgeJob building
-7. Worker pool execution
-8. Aggregation (within-judge and cross-judge)
-9. Output generation
+1. Load input (NormalizedRun JSON)
+2. Validate input against schema
+3. Compute deterministic metrics
+4. Load and merge rubrics
+5. Load judge configuration
+6. Build judge clients
+7. Build JudgeJob queue
+8. Execute jobs via worker pool
+9. Aggregate results (within-judge and cross-judge)
+10. Write output files (trace_eval.json, results.json)
+11. Generate HTML report (reads trace_eval.json and results.json from step 10)
+
+NOTE: This runner only accepts pre-normalized input (NormalizedRun JSON).
+Adapter integration must be handled in CLI/pipeline layer before invoking this runner.
 """
 
 import json
-import re
 import time
+import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
-from datetime import datetime
-from decimal import Decimal
+from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
+
+from agent_eval.evaluators.trace_eval.json_utils import SafeJSONEncoder
 
 if TYPE_CHECKING:
     from agent_eval.judges.judge_config_schema import JudgeConfig
+    from agent_eval.evaluators.trace_eval.input_validator import InputValidator
+    from agent_eval.evaluators.trace_eval.rubric_loader import RubricLoader
+    from agent_eval.judges.judge_config_schema import JudgeConfigLoader
+    from agent_eval.evaluators.trace_eval.deterministic_metrics import DeterministicMetrics
+    from agent_eval.evaluators.trace_eval.judging.job_builder import JobBuilder
+    from agent_eval.evaluators.trace_eval.judging.queue_runner import WorkerPool
+    from agent_eval.evaluators.trace_eval.judging.aggregator import Aggregator
+    from agent_eval.evaluators.trace_eval.output_writer import OutputWriter
 
 
 # Canonical status definitions - used consistently across WorkerPool, Aggregator, and Runner
@@ -30,47 +43,33 @@ CANONICAL_SUCCESS_STATUSES = {"success"}
 CANONICAL_FAILURE_STATUSES = {"failure", "timeout", "invalid_response", "cancelled", "error", "failed"}
 
 
-class SafeJSONEncoder(json.JSONEncoder):
-    """
-    JSON encoder that handles non-native JSON types safely.
-    
-    Converts:
-    - datetime objects to ISO format strings
-    - Decimal to float
-    - Other non-serializable objects to string representation
-    """
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, Decimal):
-            return float(obj)
-        if hasattr(obj, '__dict__'):
-            return obj.__dict__
-        return str(obj)
+def _rubric_id(r) -> Optional[str]:
+    """Extract rubric_id from rubric object or dict. Returns None if not found."""
+    if hasattr(r, 'rubric_id'):
+        return r.rubric_id
+    if isinstance(r, dict):
+        return r.get('rubric_id')
+    return None
 
 
-def sanitize_filename(text: str, max_length: int = 100) -> str:
+def _rubric_scale(r) -> Optional[Any]:
     """
-    Sanitize text for use in filenames.
+    Extract scoring_scale from rubric object or dict.
     
-    Replaces unsafe characters with underscores and truncates to max_length.
-    Returns "run" as fallback if result is empty.
+    Returns None if not found. The returned value may be:
+    - A dict with type/min/max/values keys
+    - A ScoringScale dataclass
+    - An arbitrary object with .type/.min/.max/.values attributes
     
-    Args:
-        text: Text to sanitize
-        max_length: Maximum length of sanitized text
-        
-    Returns:
-        Sanitized text safe for use in filenames (never empty)
+    Callers must handle all three forms (see _aggregate_results for conversion).
+    Return type is Optional[Any] because the rubric source is not constrained
+    to a single schema — this is honest, not loose.
     """
-    # Replace unsafe characters with underscores
-    safe_text = re.sub(r'[^A-Za-z0-9._-]', '_', text)
-    # Strip leading/trailing dots and underscores to avoid hidden files
-    safe_text = safe_text.strip('._')
-    # Truncate to max length
-    safe_text = safe_text[:max_length]
-    # Return fallback if empty
-    return safe_text or "run"
+    if hasattr(r, 'scoring_scale'):
+        return r.scoring_scale
+    if isinstance(r, dict):
+        return r.get('scoring_scale')
+    return None
 
 
 class TraceEvaluatorError(Exception):
@@ -89,7 +88,13 @@ class InputValidationError(TraceEvaluatorError):
 
 
 class AdapterError(TraceEvaluatorError):
-    """Adapter execution error."""
+    """
+    Adapter execution error.
+    
+    NOTE: This runner does not perform adapter work (see module docstring).
+    Retained for backward compatibility with CLI/pipeline error handling that
+    may catch this type. Remove once all callers are confirmed migrated.
+    """
     EXIT_CODE = 4
 
 
@@ -113,7 +118,9 @@ class TraceEvaluator:
         output_dir: str,
         rubrics_path: Optional[str] = None,
         verbose: bool = False,
-        debug: bool = False
+        debug: bool = False,
+        skip_report: bool = False,
+        enable_charts: bool = True
     ):
         """
         Initialize trace evaluator.
@@ -128,6 +135,8 @@ class TraceEvaluator:
             rubrics_path: Optional path to user rubrics.yaml
             verbose: Enable verbose output
             debug: Enable debug mode with detailed error traces
+            skip_report: Skip HTML report generation (Step 11)
+            enable_charts: Enable chart generation in HTML reports (default: True)
         """
         self.input_path = Path(input_path)
         self.judge_config_path = Path(judge_config_path)
@@ -135,6 +144,8 @@ class TraceEvaluator:
         self.rubrics_path = Path(rubrics_path) if rubrics_path else None
         self.verbose = verbose
         self.debug = debug
+        self.skip_report = skip_report
+        self.enable_charts = enable_charts
         
         # Validate paths exist
         if not self.input_path.exists():
@@ -155,7 +166,6 @@ class TraceEvaluator:
         self._judge_config_loader = None
         self._deterministic_metrics = None
         self._job_builder = None
-        self._worker_pool = None
         self._aggregator = None
         self._output_writer = None
         
@@ -174,42 +184,42 @@ class TraceEvaluator:
         if self.verbose or force:
             print(message)
     
-    def _get_validator(self):
+    def _get_validator(self) -> "InputValidator":
         """Lazy load input validator."""
         if self._validator is None:
             from agent_eval.evaluators.trace_eval.input_validator import InputValidator
             self._validator = InputValidator()
         return self._validator
     
-    def _get_rubric_loader(self):
+    def _get_rubric_loader(self) -> "RubricLoader":
         """Lazy load rubric loader."""
         if self._rubric_loader is None:
             from agent_eval.evaluators.trace_eval.rubric_loader import RubricLoader
             self._rubric_loader = RubricLoader()
         return self._rubric_loader
     
-    def _get_judge_config_loader(self):
+    def _get_judge_config_loader(self) -> "JudgeConfigLoader":
         """Lazy load judge config loader."""
         if self._judge_config_loader is None:
             from agent_eval.judges.judge_config_schema import JudgeConfigLoader
             self._judge_config_loader = JudgeConfigLoader()
         return self._judge_config_loader
     
-    def _get_deterministic_metrics(self):
+    def _get_deterministic_metrics(self) -> "DeterministicMetrics":
         """Lazy load deterministic metrics computer."""
         if self._deterministic_metrics is None:
             from agent_eval.evaluators.trace_eval.deterministic_metrics import DeterministicMetrics
             self._deterministic_metrics = DeterministicMetrics()
         return self._deterministic_metrics
     
-    def _get_job_builder(self):
+    def _get_job_builder(self) -> "JobBuilder":
         """Lazy load job builder."""
         if self._job_builder is None:
             from agent_eval.evaluators.trace_eval.judging.job_builder import JobBuilder
             self._job_builder = JobBuilder()
         return self._job_builder
     
-    def _get_worker_pool(self, judge_clients: Dict[str, Any], max_concurrency: int = 10):
+    def _get_worker_pool(self, judge_clients: Dict[str, Any], max_concurrency: int = 10) -> "WorkerPool":
         """
         Create worker pool with judge clients (no caching).
         
@@ -257,7 +267,7 @@ class TraceEvaluator:
         except JudgeClientFactoryError as e:
             raise ConfigError(str(e)) from e
     
-    def _get_aggregator(self):
+    def _get_aggregator(self) -> "Aggregator":
         """Lazy load aggregator with feature detection."""
         if self._aggregator is None:
             from agent_eval.evaluators.trace_eval.judging.aggregator import Aggregator
@@ -274,7 +284,7 @@ class TraceEvaluator:
             
         return self._aggregator
     
-    def _get_output_writer(self):
+    def _get_output_writer(self) -> "OutputWriter":
         """Lazy load output writer."""
         if self._output_writer is None:
             from agent_eval.evaluators.trace_eval.output_writer import OutputWriter
@@ -526,7 +536,7 @@ class TraceEvaluator:
                 "lines_skipped_runid_mismatch": 0
             }
             
-            with open(judge_runs_path, 'r') as f:
+            with open(judge_runs_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     line_num += 1
                     aggregation_stats["lines_total"] += 1
@@ -589,23 +599,6 @@ class TraceEvaluator:
                     "cross_judge_results": [],
                     "aggregation_stats": aggregation_stats
                 }
-            
-            # FIX 4: Replace inner RubricView class with helper functions for better maintainability
-            def _rubric_id(r):
-                """Extract rubric_id from rubric object or dict. Returns None if not found."""
-                if hasattr(r, 'rubric_id'):
-                    return r.rubric_id
-                if isinstance(r, dict):
-                    return r.get('rubric_id')
-                return None
-            
-            def _rubric_scale(r):
-                """Extract scoring_scale from rubric object or dict. Returns None if not found."""
-                if hasattr(r, 'scoring_scale'):
-                    return r.scoring_scale
-                if isinstance(r, dict):
-                    return r.get('scoring_scale')
-                return None
             
             # Build rubric lookup
             rubric_lookup = {}
@@ -734,8 +727,157 @@ class TraceEvaluator:
                 "aggregation_stats": aggregation_stats  # For debugging and production monitoring
             }
             
-        except Exception as e:
+        except AggregationError:
+            raise
+        except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
+            # Operational failures during JSONL parsing or aggregation logic.
             raise AggregationError(f"Aggregation failed: {e}") from e
+        except Exception as e:
+            # Unexpected errors (likely programmer bugs).  Still wrapped as
+            # AggregationError for runner UX, but the message flags it as
+            # potentially a bug so it doesn't hide silently.
+            raise AggregationError(
+                f"Aggregation failed (unexpected — may be a bug): {e}"
+            ) from e
+    
+    def _generate_html_report(self, run_id: str) -> str:
+        """
+        Generate HTML report from canonical artifacts.
+        
+        Pre-flight: verifies that trace_eval.json and results.json exist in
+        output_dir before invoking generate_report(). This turns a confusing
+        downstream error into a clear, early failure message.
+        
+        Args:
+            run_id: Run identifier
+            
+        Returns:
+            Path to generated HTML report
+            
+        Raises:
+            FileNotFoundError: If required input artifacts are missing
+            Exception: If report generation fails (caller handles)
+        """
+        # Pre-flight: verify required artifacts exist before report generation
+        trace_eval_path = self.output_dir / "trace_eval.json"
+        results_path = self.output_dir / "results.json"
+        missing = []
+        if not trace_eval_path.exists():
+            missing.append(str(trace_eval_path))
+        if not results_path.exists():
+            missing.append(str(results_path))
+        if missing:
+            raise FileNotFoundError(
+                f"Report generation requires artifacts from Step 10 that are missing: {', '.join(missing)}"
+            )
+        
+        from agent_eval.evaluators.trace_eval.reporting.html_report import generate_report
+        
+        report_path = generate_report(
+            output_dir=str(self.output_dir),
+            run_id=run_id,
+            enable_charts=self.enable_charts,
+            logger=self._log
+        )
+        
+        return report_path
+    
+    def _update_results_with_report(self, report_path: Optional[str], report_status: str) -> bool:
+        """
+        Update results.json with report path and generation status.
+        
+        This method updates the existing results.json file after report generation
+        using atomic write pattern (temp file + replace + fsync + dir fsync) for safety.
+        
+        Checksum handling:
+        - Prefers artifact_checksums key (report_builder standard)
+        - Falls back to artifact_hashes key (output_writer legacy)
+        - Initializes artifact_checksums if neither key exists
+        - Recomputes checksums for all artifacts listed in artifact_paths
+        - Does NOT self-hash results.json (would be invalidated by the write itself)
+        
+        Failure mode:
+        - Logs a warning AND returns False on operational failures (OSError,
+          JSON decode/encode) so the caller can decide whether to treat it
+          as degraded or fatal.
+        - Does NOT catch broad Exception — programmer bugs (KeyError,
+          TypeError, AttributeError) are allowed to propagate so they
+          surface during development rather than hiding behind a warning.
+        
+        Args:
+            report_path: Path to generated HTML report (None if failed/skipped)
+            report_status: Status of report generation ("success", "failed", "skipped")
+            
+        Returns:
+            True if update succeeded, False otherwise
+        """
+        import os
+        
+        try:
+            results_path = self.output_dir / "results.json"
+            
+            if not results_path.exists():
+                self._log(f"⚠ Warning: results.json not found, cannot update with report info")
+                return False
+            
+            with open(results_path, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            if "artifact_paths" not in results:
+                results["artifact_paths"] = {}
+            results["artifact_paths"]["report"] = report_path
+            
+            if "execution_stats" not in results:
+                results["execution_stats"] = {}
+            results["execution_stats"]["report_generation_status"] = report_status
+            
+            # Resolve checksum key: prefer artifact_checksums (report_builder standard),
+            # fall back to artifact_hashes (output_writer legacy),
+            # initialize artifact_checksums if neither exists.
+            if "artifact_checksums" in results:
+                checksum_key = "artifact_checksums"
+            elif "artifact_hashes" in results:
+                checksum_key = "artifact_hashes"
+            else:
+                checksum_key = "artifact_checksums"
+                results[checksum_key] = {}
+            
+            # Recompute checksums for all artifacts except results.json itself.
+            # results.json cannot self-hash (the write would invalidate the hash).
+            output_writer = self._get_output_writer()
+            for artifact_name, artifact_path in results["artifact_paths"].items():
+                if artifact_name == "results" or not artifact_path:
+                    continue
+                try:
+                    results[checksum_key][artifact_name] = output_writer.compute_file_hash(artifact_path)
+                except OSError:
+                    results[checksum_key][artifact_name] = None
+            
+            temp_path = results_path.with_suffix('.json.tmp')
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, ensure_ascii=False, indent=2, cls=SafeJSONEncoder)
+                f.flush()
+                os.fsync(f.fileno())
+            
+            temp_path.replace(results_path)
+            
+            # Directory fsync: ensures the rename is durable on crash.
+            # Without this, the directory entry update may be lost on power failure.
+            dir_fd = os.open(str(self.output_dir), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+            
+            self._log(f"✓ Updated results.json with report info (checksum key: {checksum_key})")
+            return True
+            
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            self._log(f"⚠ Warning: Failed to update results.json with report info: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            return False
     
     def _write_outputs(
         self,
@@ -745,7 +887,9 @@ class TraceEvaluator:
         execution_stats: Dict[str, Any],
         rubrics: List,
         judge_config: "JudgeConfig",
-        normalized_run: Dict[str, Any]
+        normalized_run: Dict[str, Any],
+        report_path: Optional[str] = None,
+        report_generation_status: str = "pending"
     ) -> None:
         """
         Write canonical output files.
@@ -758,6 +902,8 @@ class TraceEvaluator:
             rubrics: List of rubrics for config hash
             judge_config: Judge configuration (JudgeConfig object) for config hash
             normalized_run: Original input for input hash
+            report_path: Optional path to generated HTML report (None if not yet generated)
+            report_generation_status: Status of report generation ("pending", "success", "failed", "skipped")
             
         Raises:
             OutputWriteError: If output writing fails
@@ -789,8 +935,13 @@ class TraceEvaluator:
             # Build artifact_paths for results.json
             artifact_paths = {
                 "judge_runs": str(self.output_dir / "judge_runs.jsonl"),
-                "trace_eval": str(trace_eval_path)
+                "trace_eval": str(trace_eval_path),
+                "report": report_path if report_path else None
             }
+            
+            # Build execution_stats copy to avoid mutating caller's dict
+            execution_stats_for_output = dict(execution_stats)
+            execution_stats_for_output["report_generation_status"] = report_generation_status
             
             # Extract judge_disagreements
             judge_disagreements = output_writer.extract_judge_disagreements(
@@ -832,12 +983,12 @@ class TraceEvaluator:
                 run_id=run_id,
                 rubrics_config={"rubrics": rubrics_list},
                 judge_config=judge_config_dict,
-                input_data=normalized_run,  # Correct parameter name
+                input_data=normalized_run,
                 deterministic_metrics=deterministic_metrics,
-                rubric_results=rubric_results_for_results_json,  # Correct structure
-                judge_disagreements=judge_disagreements,  # Now provided
-                artifact_paths=artifact_paths,  # Now provided
-                execution_stats=execution_stats
+                rubric_results=rubric_results_for_results_json,
+                judge_disagreements=judge_disagreements,
+                artifact_paths=artifact_paths,
+                execution_stats=execution_stats_for_output
             )
             self._log(f"✓ Wrote {results_path}")
             
@@ -846,6 +997,81 @@ class TraceEvaluator:
             raise
         except Exception as e:
             raise OutputWriteError(f"Output writing failed: {e}") from e
+    
+    def _handle_report_lifecycle(self, run_id: str) -> Tuple[Optional[str], str]:
+        """
+        Generate HTML report and persist report metadata to results.json.
+        
+        Encapsulates the full Step 11 lifecycle:
+        1. Generate report (or skip if configured)
+        2. Persist report path and status to results.json
+        3. Emit degraded-state warnings if metadata persistence fails
+        
+        Args:
+            run_id: Run identifier
+            
+        Returns:
+            Tuple of (report_path, report_generation_status)
+        """
+        if self.skip_report:
+            self._log("\nStep 11: Skipping HTML report generation (--skip-report flag set)", force=True)
+            if not self._update_results_with_report(None, "skipped"):
+                self._log("⚠ Warning: results.json metadata may be incomplete (skipped status not persisted)")
+            return None, "skipped"
+        
+        # Import once for the except branch below.
+        from agent_eval.evaluators.trace_eval.reporting.report_builder import ReportGenerationError as _ReportGenerationError
+
+        self._log("\nStep 11: Generating HTML report", force=True)
+        try:
+            report_path = self._generate_html_report(run_id)
+            self._log(f"✓ Generated HTML report: {report_path}")
+            
+            if not self._update_results_with_report(report_path, "success"):
+                self._log("⚠ Warning: results.json metadata may be incomplete (report info not persisted)")
+            
+            return report_path, "success"
+            
+        except (FileNotFoundError, OSError) as e:
+            # Pre-flight artifact missing or file system error — operational failure
+            self._log(f"⚠ Warning: HTML report generation failed: {e}")
+            
+            if not self._update_results_with_report(None, "failed"):
+                self._log("⚠ Warning: results.json metadata may be incomplete (failure status not persisted)")
+            
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            
+            return None, "failed"
+            
+        except _ReportGenerationError as e:
+            # Report-layer error — degrade gracefully.
+            self._log(f"⚠ Warning: HTML report generation failed: {e}")
+            
+            if not self._update_results_with_report(None, "failed"):
+                self._log("⚠ Warning: results.json metadata may be incomplete (failure status not persisted)")
+            
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            
+            return None, "failed"
+
+        except Exception as e:
+            # Not a known report-layer error — likely a programmer bug in
+            # runner/report glue code.  Still degrade gracefully (evaluation
+            # artifacts are already written) but log at higher severity.
+            self._log(f"⚠ Warning: Unexpected error during report generation (may be a bug): {e}")
+            
+            if not self._update_results_with_report(None, "failed"):
+                self._log("⚠ Warning: results.json metadata may be incomplete (failure status not persisted)")
+            
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            
+            return None, "failed"
     
     def run(self) -> int:
         """
@@ -866,7 +1092,7 @@ class TraceEvaluator:
             
             # Step 1: Load normalized input
             self._log(f"\nStep 1: Loading NormalizedRun from {self.input_path}", force=True)
-            with open(self.input_path, 'r') as f:
+            with open(self.input_path, 'r', encoding='utf-8') as f:
                 input_data = json.load(f)
             
             # Step 2: Validate input
@@ -874,20 +1100,16 @@ class TraceEvaluator:
             validated_input = self._validate_input(input_data)
             run_id = validated_input.get("run_id")
             
-            # Ensure run_id is present and stable
+            # Ensure run_id is present and stable.
+            # The UUID suffix mirrors the pipeline's fallback format so that
+            # runner-direct and pipeline-driven runs produce equally unique IDs.
             if not run_id:
-                run_id = f"run_{int(time.time() * 1000)}"
+                run_id = f"run_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
                 self._log(f"⚠ Warning: No run_id in input, generated: {run_id}")
                 validated_input["run_id"] = run_id
             
-            # Persist validated normalized output with run_id in filename
-            # This ensures normalized_run.json is always schema-valid and prevents filename collisions
-            # Sanitize run_id for safe filename usage
-            safe_run_id = sanitize_filename(run_id)
-            normalized_path = self.output_dir / f"normalized_run.{safe_run_id}.json"
-            with open(normalized_path, 'w', encoding='utf-8') as f:
-                json.dump(validated_input, f, ensure_ascii=False, indent=2, cls=SafeJSONEncoder)
-            self._log(f"✓ Wrote {normalized_path}")
+            # NOTE: Normalized artifact persistence is owned by the pipeline layer.
+            # Runner does not write normalized_run.json — it only consumes it.
             
             # Step 3: Compute deterministic metrics
             self._log("\nStep 3: Computing deterministic metrics", force=True)
@@ -901,12 +1123,12 @@ class TraceEvaluator:
             self._log("\nStep 5: Loading judge configuration", force=True)
             judge_config = self._load_judge_config()
             
-            # Step 5.5: Build judge clients
-            self._log("\nStep 5.5: Building judge clients", force=True)
+            # Step 6: Build judge clients
+            self._log("\nStep 6: Building judge clients", force=True)
             judge_clients = self._build_judge_clients(judge_config)
             
-            # Step 6: Build JudgeJobs
-            self._log("\nStep 6: Building JudgeJobs", force=True)
+            # Step 7: Build JudgeJobs
+            self._log("\nStep 7: Building JudgeJobs", force=True)
             jobs = self._build_judge_jobs(
                 normalized_run=validated_input,
                 rubrics=rubrics,
@@ -914,26 +1136,24 @@ class TraceEvaluator:
                 deterministic_metrics=deterministic_metrics
             )
             
-            # Step 7: Execute jobs
-            self._log("\nStep 7: Executing JudgeJobs", force=True)
+            # Step 8: Execute jobs
+            self._log("\nStep 8: Executing JudgeJobs", force=True)
             execution_stats = self._execute_jobs(jobs, judge_clients)
             
-            # Step 8: Aggregate results
-            self._log("\nStep 8: Aggregating results", force=True)
+            # Step 9: Aggregate results
+            self._log("\nStep 9: Aggregating results", force=True)
             judge_runs_path = self.output_dir / "judge_runs.jsonl"
             aggregated_results = self._aggregate_results(judge_runs_path, rubrics, run_id)
             
-            # FIX 2: Merge aggregation_stats into execution_stats for results.json
             if "aggregation_stats" in aggregated_results:
                 execution_stats["aggregation_stats"] = aggregated_results["aggregation_stats"]
             
-            # FIX: Add attempted_jobs_total to judge_summary for clarity
-            # This helps users understand the difference between attempted vs parsed jobs
             if "judge_summary" in aggregated_results and "total_jobs" in execution_stats:
                 aggregated_results["judge_summary"]["attempted_jobs_total"] = execution_stats["total_jobs"]
             
-            # Step 9: Write outputs
-            self._log("\nStep 9: Writing output files", force=True)
+            # Step 10: Write outputs FIRST (trace_eval.json, results.json)
+            # This ensures all canonical artifacts exist before report generation
+            self._log("\nStep 10: Writing output files", force=True)
             self._write_outputs(
                 run_id=run_id,
                 deterministic_metrics=deterministic_metrics,
@@ -941,8 +1161,15 @@ class TraceEvaluator:
                 execution_stats=execution_stats,
                 rubrics=rubrics,
                 judge_config=judge_config,
-                normalized_run=validated_input
+                normalized_run=validated_input,
+                report_path=None,  # Will be updated after report generation
+                report_generation_status="pending"
             )
+            
+            # Step 11: Generate HTML report AFTER outputs
+            # Depends on trace_eval.json and results.json existing with the expected schema.
+            # generate_report() reads these artifacts directly from output_dir.
+            report_path, report_generation_status = self._handle_report_lifecycle(run_id)
             
             # Success summary
             elapsed_time = time.time() - start_time
@@ -950,6 +1177,8 @@ class TraceEvaluator:
             self._log(f"✓ EVALUATION COMPLETE", force=True)
             self._log(f"  Run ID: {run_id}", force=True)
             self._log(f"  Output directory: {self.output_dir}", force=True)
+            if report_generation_status == "success" and report_path:
+                self._log(f"  HTML report: {report_path}", force=True)
             self._log(f"  Elapsed time: {elapsed_time:.2f}s", force=True)
             self._log("=" * 60, force=True)
             
