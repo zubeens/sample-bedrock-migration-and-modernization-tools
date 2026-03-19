@@ -1,0 +1,357 @@
+/* Base styles */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background-color: #f5f5f5;
+    margin: 0;
+    padding: 20px;
+    line-height: 1.6;
+    color: #333;
+}
+
+/* Report container */
+.report-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    background-color: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Section styles */
+section {
+    margin-bottom: 30px;
+    padding: 20px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    background-color: #fafafa;
+}
+
+section h2 {
+    margin-top: 0;
+    color: #1a1a1a;
+    border-bottom: 2px solid #4CAF50;
+    padding-bottom: 10px;
+}
+
+section h3 {
+    color: #333;
+    margin-top: 20px;
+}
+
+/* Table styles */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    background-color: white;
+}
+
+th {
+    background-color: #4CAF50;
+    color: white;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    border: 1px solid #45a049;
+}
+
+td {
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+}
+
+tr:hover {
+    background-color: #f5f5f5;
+}
+
+tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+/* Collapsible button styles */
+.collapsible {
+    cursor: pointer;
+    background-color: #e8e8e8;
+    color: #333;
+    padding: 12px;
+    width: 100%;
+    border: none;
+    text-align: left;
+    outline: none;
+    font-size: 15px;
+    font-weight: 500;
+    border-radius: 4px;
+    margin-top: 10px;
+    transition: background-color 0.3s ease;
+}
+
+.collapsible:hover {
+    background-color: #d0d0d0;
+}
+
+.collapsible:after {
+    content: '\25B6';
+    color: #666;
+    font-weight: bold;
+    float: right;
+    margin-left: 5px;
+}
+
+.collapsible.active:after {
+    content: '\25BC';
+}
+
+/* Collapsible content styles */
+.collapsible-content {
+    display: none;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-left: 3px solid #4CAF50;
+    margin-top: 5px;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Score color classes */
+.score-high {
+    color: #2e7d32;
+    font-weight: 600;
+    background-color: #e8f5e9;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.score-medium {
+    color: #f57c00;
+    font-weight: 600;
+    background-color: #fff3e0;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.score-low {
+    color: #c62828;
+    font-weight: 600;
+    background-color: #ffebee;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* High-risk row highlighting */
+.high-risk {
+    background-color: #ffebee !important;
+    border-left: 4px solid #c62828 !important;
+}
+
+.high-risk:hover {
+    background-color: #ffcdd2 !important;
+}
+
+/* Chart container styles */
+.chart-container {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: white;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+}
+
+/* Progress bar for success rate */
+.progress-bar {
+    width: 100%;
+    height: 20px;
+    background-color: #e0e0e0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background-color: #4CAF50;
+    transition: width 0.3s ease;
+}
+
+/* Badge styles */
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin: 2px;
+}
+
+.badge-success {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+.badge-warning {
+    background-color: #fff3e0;
+    color: #f57c00;
+}
+
+.badge-error {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.badge-info {
+    background-color: #e3f2fd;
+    color: #1565c0;
+}
+
+/* Code and pre-formatted text */
+pre {
+    background-color: #f5f5f5;
+    padding: 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+    border: 1px solid #ddd;
+}
+
+code {
+    background-color: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+}
+
+/* List styles */
+ul, ol {
+    padding-left: 25px;
+}
+
+li {
+    margin-bottom: 8px;
+}
+
+/* Alert/warning boxes */
+.alert {
+    padding: 12px 15px;
+    border-radius: 4px;
+    margin: 10px 0;
+}
+
+.alert-warning {
+    background-color: #fff3e0;
+    border-left: 4px solid #f57c00;
+    color: #e65100;
+}
+
+.alert-error {
+    background-color: #ffebee;
+    border-left: 4px solid #c62828;
+    color: #b71c1c;
+}
+
+.alert-info {
+    background-color: #e3f2fd;
+    border-left: 4px solid #1565c0;
+    color: #0d47a1;
+}
+
+/* Metadata section */
+.metadata {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.metadata-item {
+    padding: 10px;
+    background-color: white;
+    border-radius: 4px;
+    border: 1px solid #e0e0e0;
+}
+
+.metadata-label {
+    font-weight: 600;
+    color: #666;
+    font-size: 0.9em;
+    margin-bottom: 5px;
+}
+
+.metadata-value {
+    color: #333;
+    font-size: 1.1em;
+}
+
+/* Responsive design for mobile */
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    
+    .report-container {
+        padding: 15px;
+    }
+    
+    section {
+        padding: 15px;
+    }
+    
+    table {
+        font-size: 0.9em;
+    }
+    
+    th, td {
+        padding: 8px;
+    }
+    
+    .metadata {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 5px;
+    }
+    
+    .report-container {
+        padding: 10px;
+        border-radius: 4px;
+    }
+    
+    section {
+        padding: 10px;
+        margin-bottom: 15px;
+    }
+    
+    table {
+        font-size: 0.8em;
+    }
+    
+    th, td {
+        padding: 6px;
+    }
+    
+    .collapsible {
+        font-size: 14px;
+        padding: 10px;
+    }
+}
+
+/* Print styles */
+@media print {
+    body {
+        background-color: white;
+        padding: 0;
+    }
+    
+    .report-container {
+        box-shadow: none;
+        max-width: 100%;
+    }
+    
+    .collapsible-content {
+        display: block !important;
+    }
+    
+    .collapsible:after {
+        display: none;
+    }
+}
